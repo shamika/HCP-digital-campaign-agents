@@ -1,0 +1,20 @@
+[project]
+name = "drug-digital-campaign"
+version = "0.1.0"
+description = "HCP Digital Campaign Analytics with Neptune Graph"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "aws-cdk-lib>=2.100.0",
+    "constructs>=10.0.0",
+    "pandas>=2.0.0",
+    "boto3>=1.26.0",
+    "sagemaker>=2.251.1",
+    "strands>=0.1.0",
+    "mcp>=1.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.1",
+]
