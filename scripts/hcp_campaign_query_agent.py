@@ -28,14 +28,50 @@ def create_mcp_client(neptune_endpoint):
         )
     )
 
-def create_hcp_campaign_agent(tools):
+def create_hcp_campaign_agent(tools, sagemaker_endpoint):
     """Create and initialize the HCP Campaign analysis agent with tools."""
     bedrockmodel = BedrockModel(
         model_id="us.anthropic.claude-3-5-sonnet-20240620-v1:0",
         temperature=0.7
     )
     
-    system_prompt = """You are an expert in Healthcare Professional (HCP) digital campaign analytics and graph databases. You are provided with tools to query the HCP campaign data stored in Neptune Analytics.
+    def get_hcp_campaign_predictions(hcp_ids: list, tactic_ids: list) -> str:
+        """
+        Get predictive probabilities for HCP engagement from the trained SageMaker Graph Neural Network model.
+        Use this tool to predict if an HCP will engage with specific marketing tactics.
+        """
+        import json
+        import boto3
+        import logging
+        
+        logging.getLogger("strands").info(f"Predicting engagement for HCPs {hcp_ids} and tactics {tactic_ids}")
+        
+        sagemaker_runtime = boto3.client('sagemaker-runtime', region_name=os.getenv("AWS_DEFAULT_REGION", "us-east-1"))
+        
+        payload = {
+            "hcp_ids": hcp_ids,
+            "tactic_ids": tactic_ids
+        }
+        
+        try:
+            response = sagemaker_runtime.invoke_endpoint(
+                EndpointName=sagemaker_endpoint,
+                ContentType='application/json',
+                Body=json.dumps(payload)
+            )
+            result = json.loads(response['Body'].read().decode())
+            return json.dumps(result, indent=2)
+        except Exception as e:
+            error_msg = f"Error invoking SageMaker endpoint: {str(e)}"
+            logging.getLogger("strands").error(error_msg)
+            # Fail safe in prod, fail loud in dev context: We'll return the error string so the agent knows it failed
+            return error_msg
+            
+    # Include both the MCP tools and the SageMaker predictions tool
+    agent_tools = tools if isinstance(tools, list) else [tools]
+    agent_tools.append(get_hcp_campaign_predictions)
+    
+    system_prompt = """You are an expert in Healthcare Professional (HCP) digital campaign analytics and graph databases. You are provided with tools to query the HCP campaign data stored in Neptune Analytics, AND a tool to predict campaign effectiveness using SageMaker.
 
 The graph contains the following node types and their relationships:
 - **HCP**: Healthcare professionals with properties like npi, email
@@ -61,8 +97,9 @@ Key relationships:
 ALWAYS use the available tools to:
 1. First explore the graph schema to understand the actual structure
 2. Query the database for specific insights about HCP engagement patterns
-3. Analyze campaign effectiveness and HCP behavior
-4. Provide data-driven insights about pharmaceutical marketing
+3. If requested to make predictions about future behavior or recommend next best actions, use the SageMaker prediction tool by passing the relevant hcp_ids and tactic_ids of interest.
+4. Analyze campaign effectiveness and combine historical data from the graph with predictive probabilities.
+5. Provide data-driven insights about pharmaceutical marketing
 
 Your task is to assist users in analyzing HCP digital campaign data by leveraging these tools. When users ask about engagement patterns, campaign performance, or HCP behavior, use the tools to retrieve current, accurate data rather than making assumptions.
 
@@ -71,10 +108,10 @@ If you cannot find information using the available tools, respond with "I don't 
     agent = Agent(
         model=bedrockmodel,
         system_prompt=system_prompt,
-        tools=[tools],
+        tools=agent_tools,
         agent_id="hcp_campaign_agent",
         name="HCP Campaign Analytics Agent",
-        description="An agent that helps users analyze HCP digital campaign data and engagement patterns."
+        description="An agent that helps users analyze HCP digital campaign data, graph patterns, and make ML predictions."
     )
     return agent
 
@@ -88,6 +125,8 @@ def main():
     parser = argparse.ArgumentParser(description="HCP Campaign Analytics Tool")
     parser.add_argument("--neptune-endpoint", required=True, 
                        help="Neptune Analytics graph ID (e.g., g-jdct09zc09)")
+    parser.add_argument("--sagemaker-endpoint", required=False, default="hcp-campaign-model-endpoint",
+                       help="SageMaker Inference endpoint name")
     parser.add_argument("--region", default="us-east-1",
                        help="AWS region (default: us-east-1)")
     
@@ -106,7 +145,7 @@ def main():
         tools = mcp_client.list_tools_sync()
         
         # Create agent with tools
-        hcp_campaign_agent = create_hcp_campaign_agent(tools)
+        hcp_campaign_agent = create_hcp_campaign_agent(tools, args.sagemaker_endpoint)
         hcp_campaign_agent.messages = create_initial_messages()
         
         print("\n🏥 HCP Digital Campaign Analytics Tool 📊\n")
